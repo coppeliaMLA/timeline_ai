@@ -3,6 +3,7 @@ from langchain import PromptTemplate, LLMChain
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
+import pandas as pd
 
 
 class TimelineBuilder:
@@ -10,11 +11,13 @@ class TimelineBuilder:
     A class to build a timeline from a text document
     """
 
-    def __init__(self):
+    def __init__(self, timeline_title="Timeline", name_map=None):
+        self.timeline_title = timeline_title
         self.texts = None
         self.timeline = None
         self.pages_filter = None
         self.pdf_name = None
+        self.name_map = name_map
 
     def load_data(self, file, pages_filter=None):
         """
@@ -67,8 +70,13 @@ class TimelineBuilder:
                 e["source"] = text.page_content
                 e["page"] = text.metadata["page"] + 1
             timeline = timeline + page_events
+
+        # Remove duplicates from the timeline
+        df = pd.DataFrame(timeline)
+        df = df.drop_duplicates(subset=["event", "year"])
+        timeline = df.to_dict(orient="records")
+
         self.timeline = timeline
-        return timeline
 
     def create_timeline_diagram(self, file_out, start_year, end_year, width=3000):
         """
@@ -83,7 +91,8 @@ class TimelineBuilder:
         Returns:
             None
         """
-        head = """
+        head = (
+            """
         <link rel="stylesheet" href="https://unpkg.com/d3-milestones/build/d3-milestones.css">
         <style>
             div {
@@ -100,7 +109,11 @@ class TimelineBuilder:
         <div id="tooltip"
         style="position: absolute; opacity: 0; padding: 10px; background-color: whitesmoke; border: 1px solid black; border-radius: 5px; width:300px; font-size: 8pt;">
         </div>
-        """
+        <div>
+            <h2>"""
+            + self.timeline_title
+            + "</h2></div>"
+        )
 
         script_tail = """
         ]);
@@ -128,14 +141,12 @@ class TimelineBuilder:
                     {
                         "year": "{}/{}/{}".format(
                             e["year"],
-                            1,
-                            1,
-                            # max(1, int(e["month"])),
-                            # max(1, int(e["day_of_month"])),
+                            1 if e["month"] == 0 or e["month"] == "" else e["month"],
+                            1 if e["day_of_month"] == 0 else e["day_of_month"],
                         ),
                         "title": (
                             e["event"] + " (year level)"
-                            if e["month"] == 0
+                            if e["month"] == 0 or e["month"] == ""
                             else e["event"]
                         ),
                         "page": e["page"],
@@ -242,6 +253,11 @@ class TimelineBuilder:
                 e["year"] = int(e["year"])
             else:
                 e["year"] = 0
+
+            if self.name_map is not None:
+                for k, v in self.name_map.items():
+                    if k in e["event"]:
+                        e["event"] = e["event"].replace(k, v)
 
         # Filter the response
 
