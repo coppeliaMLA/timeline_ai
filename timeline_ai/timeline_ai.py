@@ -85,6 +85,17 @@ class TimelineBuilder:
         """
         head = """
         <link rel="stylesheet" href="https://unpkg.com/d3-milestones/build/d3-milestones.css">
+        <style>
+            div {
+                pointer-events: none;
+            }
+
+            a {
+                pointer-events: auto;
+                text-decoration: none;
+                color: inherit;
+            }
+            </style>
         <script src="https://unpkg.com/d3-milestones/build/d3-milestones.min.js"></script>
         <div id="tooltip"
         style="position: absolute; opacity: 0; padding: 10px; background-color: whitesmoke; border: 1px solid black; border-radius: 5px; width:300px; font-size: 8pt;">
@@ -106,18 +117,8 @@ class TimelineBuilder:
         .orientation('horizontal')
         .useLabels(true)
         .optimize(true)
-        .onEventClick((d) => {
-            window.open('"""
-
-        script = script + self.pdf_name
-
-        script = (
-            script
-            + """#page=' + d.srcElement.__data__.attributes.page, '_blank');
-        })
         .render([
         """
-        )
         js_string = [
             {"year": "{}/1/1".format(start_year), "title": "Start of timeline"}
         ]
@@ -138,6 +139,7 @@ class TimelineBuilder:
                             else e["event"]
                         ),
                         "page": e["page"],
+                        "url": self.pdf_name + "#page=" + str(e["page"]),
                     }
                 )
         js_string.append(
@@ -279,10 +281,3 @@ class TimelineBuilder:
                     return False
 
         return True
-
-    def filter_events(self, events):
-        clean_events = []
-        for e in events:
-            if self.validate_event(e):
-                clean_events.append(e)
-        return clean_events
