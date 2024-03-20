@@ -5,20 +5,55 @@ from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
 import pandas as pd
 
+# Map month names to numbers
+month_map = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "aug": 8,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
 
 class TimelineBuilder:
     """
     A class to build a timeline from a text document
     """
 
-    def __init__(self, timeline_title="Timeline", useful_info="", name_map=None):
+    def __init__(
+        self,
+        timeline_title="Timeline",
+        useful_info="",
+        name_map=None,
+        suppress_bracketted_dates=False,
+    ):
         self.timeline_title = timeline_title
-        self.texts = None
+        self.chunks = None
         self.timeline = None
         self.pages_filter = None
         self.pdf_name = None
         self.name_map = name_map
         self.useful_info = useful_info
+        self.suppress_bracketted_dates = suppress_bracketted_dates
 
     def load_data(self, file, pages_filter=None):
         """
@@ -36,9 +71,9 @@ class TimelineBuilder:
             loader = PyPDFLoader(file)
             pages = loader.load_and_split()
             if pages_filter is not None:
-                self.texts = pages[pages_filter[0] : pages_filter[1]]
+                self.chunks = pages[pages_filter[0] : pages_filter[1]]
             else:
-                self.texts = pages
+                self.chunks = pages
         else:
             with open(file) as f:
                 raw_doc = f.read()
@@ -48,12 +83,134 @@ class TimelineBuilder:
                 length_function=len,
                 is_separator_regex=False,
             )
-            self.texts = text_splitter.create_documents([raw_doc])
+            self.chunks = text_splitter.create_documents([raw_doc])
 
         self.pages_filter = pages_filter
         self.pdf_name = file
 
-    def run_across_chunks(self):
+    def preprocessing(self):
+        """
+        Preprocesses the texts by removing unwanted characters.
+
+        Returns:
+            None
+        """
+        # Remove bracketted dates
+        if self.suppress_bracketted_dates:
+            for c in self.chunks:
+                c.page_content = re.sub(r"\(\d{4\s*-\s*\d{4}\)", "", c.page_content)
+
+    def pass_to_llm(self):
+        """
+        Passes the texts to the language model to extract events.
+
+        Returns:
+            None
+        """
+        self.responses = []
+        for text in self.chunks[:4]:
+            response = {
+                "llm_response": self.prompt_llm(text.page_content),
+                "page": text.metadata["page"] + 1,
+                "source": text.page_content,
+            }
+            self.responses.append(response)
+
+    def prompt_llm(self, text):
+        """
+        Prompts the language model to extract events from the texts.
+
+        Returns:
+            None
+        """
+
+        template = """
+        Extract a timeline with dates from the text given below. The timeline should be stored in json as an array
+        of event objects where each event has the attributes "year", "month", "day_of_month" and "event". If the month and day
+        of month are unknown then they should be left blank. {useful_info}
+
+        Here is the text: {page}.
+        """
+
+        prompt = PromptTemplate(
+            template=template, input_variables=["page", "useful_info"]
+        )
+        llm_chain = LLMChain(
+            prompt=prompt, llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+        )
+        response = llm_chain.run({"page": text, "useful_info": self.useful_info})
+
+        response = response.replace("```json", "").replace("```", "").strip()
+
+        return response
+
+    def check_response_format(self):
+
+        for r in self.responses:
+            try:
+                # Read the response as a json object
+                r["response_as_json"] = json.loads(r["llm_response"])
+                r["valid_format"] = True
+            except ValueError:
+                r["response_as_json"] = None
+                r["valid_format"] = False
+
+    def transform_events(self):
+        events = []
+        for r in self.responses:
+            if r["valid_format"]:
+                for e in r["response_as_json"]:
+                    e["source"] = r["source"]
+                    e["page"] = r["page"]
+                    events.append(e)
+        self.timeline = []
+        for e in events:
+            trans_event = self.transform_event(e)
+            self.timeline.append(self.transform_event(e))
+
+    def transform_event(self, e):
+
+        if "month" not in e:
+            e["month"] = ""
+
+        if "day_of_month" not in e:
+            e["day_of_month"] = ""
+
+        if isinstance(e["month"], int):
+            if e["month"] < 0 or e["month"] > 12:
+                e["month"] = 0
+        elif isinstance(e["month"], str):
+            if e["month"].lower() in month_map:
+                e["month"] = month_map[e["month"].lower()]
+            elif e["month"] in [str(i) for i in range(1, 13)]:
+                e["month"] = int(e["month"])
+            else:
+                e["month"] = 0
+        else:
+            e["month"] = 0
+
+        if isinstance(e["day_of_month"], int):
+            pass
+        elif isinstance(e["day_of_month"], str) and e["day_of_month"].isdigit():
+            e["day_of_month"] = int(e["day_of_month"])
+        else:
+            e["day_of_month"] = 0
+
+        if isinstance(e["year"], int):
+            pass
+        elif isinstance(e["year"], str) and e["year"].isdigit():
+            e["year"] = int(e["year"])
+        else:
+            e["year"] = 0
+
+        return e
+
+    def deduplicate_timeline(self):
+        df = pd.DataFrame(self.timeline)
+        df = df.drop_duplicates(subset=["event", "year"])
+        self.timeline = df.to_dict(orient="records")
+
+    def run_across_chucks(self):
         """
         Runs the timeline generation process across chunks of texts.
 
@@ -65,7 +222,7 @@ class TimelineBuilder:
             list: The generated timeline consisting of events extracted from the texts.
         """
         timeline = []
-        for text in self.texts:
+        for text in self.chunks:
             page_events = self.get_events(text.page_content)
             for e in page_events:
                 e["source"] = text.page_content
@@ -190,10 +347,7 @@ class TimelineBuilder:
         template = """
         Extract a timeline with dates from the text given below. The timeline should be stored in json as an array
         of event objects where each event has the attributes "year", "month", "day_of_month" and "event". If the month and day
-        of month are unknown then they should be left blank. When a person's name is followed by two dates in brackets then 
-        the first date is the birth date and the second date is the death date. You should include both the birth and the death
-        in the timeline. For example, "Albert Einstein (1879-1955)" should be included as two events, one for the birth and one
-        for the death. {useful_info}
+        of month are unknown then they should be left blank. {useful_info}
 
         Here is the text: {page}.
         """
@@ -282,7 +436,7 @@ class TimelineBuilder:
             return False
         return True
 
-    def check_format(self, events):
+    def check_json_format(self, events):
 
         # Check that the events object is a list
         if not isinstance(events, list):
@@ -325,3 +479,11 @@ def check_birth_string(input_str):
         return f"The birth of {name}"
     else:
         return input_str
+
+
+"""
+When a person's name is followed by two dates in brackets then 
+        the first date is the birth date and the second date is the death date. You should include both the birth and the death
+        in the timeline. For example, "Albert Einstein (1879-1955)" should be included as two events, one for the birth and one
+        for the death. 
+"""
