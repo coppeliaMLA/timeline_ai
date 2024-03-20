@@ -11,13 +11,14 @@ class TimelineBuilder:
     A class to build a timeline from a text document
     """
 
-    def __init__(self, timeline_title="Timeline", name_map=None):
+    def __init__(self, timeline_title="Timeline", useful_info="", name_map=None):
         self.timeline_title = timeline_title
         self.texts = None
         self.timeline = None
         self.pages_filter = None
         self.pdf_name = None
         self.name_map = name_map
+        self.useful_info = useful_info
 
     def load_data(self, file, pages_filter=None):
         """
@@ -192,15 +193,18 @@ class TimelineBuilder:
         of month are unknown then they should be left blank. When a person's name is followed by two dates in brackets then 
         the first date is the birth date and the second date is the death date. You should include both the birth and the death
         in the timeline. For example, "Albert Einstein (1879-1955)" should be included as two events, one for the birth and one
-        for the death.
+        for the death. {useful_info}
+
         Here is the text: {page}.
         """
 
-        prompt = PromptTemplate(template=template, input_variables=["page"])
+        prompt = PromptTemplate(
+            template=template, input_variables=["page", "useful_info"]
+        )
         llm_chain = LLMChain(
             prompt=prompt, llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         )
-        response = llm_chain.run({"page": text})
+        response = llm_chain.run({"page": text, "useful_info": self.useful_info})
 
         response = response.replace("```json", "").replace("```", "").strip()
 
@@ -256,8 +260,11 @@ class TimelineBuilder:
 
             if self.name_map is not None:
                 for k, v in self.name_map.items():
-                    if k in e["event"]:
-                        e["event"] = e["event"].replace(k, v)
+                    for i in v:
+                        if i in e["event"]:
+                            e["event"] = e["event"].replace(i, k)
+
+            e["event"] = check_birth_string(e["event"])
 
         # Filter the response
 
@@ -297,3 +304,24 @@ class TimelineBuilder:
                     return False
 
         return True
+
+
+def check_birth_string(input_str):
+
+    if input_str[:5].lower() == "birth":
+        input_str = "The birth" + input_str[5:]
+
+    # Remove anything withing curved brackets
+    input_str = re.sub(r"\([^()]*\)", "", input_str)
+
+    # Define the pattern to match "X is born" or "X born"
+    pattern = re.compile(r"^(?P<name>\w+)\s+(?:is\s+)?born$", re.IGNORECASE)
+
+    # Try to match the pattern
+    match = pattern.match(input_str.strip())
+
+    if match:
+        name = match.group("name")
+        return f"The birth of {name}"
+    else:
+        return input_str
