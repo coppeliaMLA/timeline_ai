@@ -34,6 +34,48 @@ month_map = {
 }
 
 
+def build_timeline(
+    pdf_file,
+    output_file,
+    timeline_title,
+    start_year,
+    end_year,
+    useful_info="",
+    name_map=None,
+    suppress_bracketted_dates=False,
+    test_mode=False,
+):
+    """
+    Builds a timeline based on the provided parameters.
+
+    Args:
+        pdf_file (str): The path to the PDF file containing the timeline data.
+        output_file (str): The path to save the generated timeline diagram.
+        timeline_title (str): The title of the timeline.
+        start_year (int): The starting year of the timeline.
+        end_year (int): The ending year of the timeline.
+        useful_info (str, optional): Additional useful information to include in the timeline. Defaults to "".
+        name_map (dict, optional): A dictionary mapping names to their desired representation in the timeline. Defaults to None.
+        suppress_bracketted_dates (bool, optional): Whether to suppress bracketed dates in the timeline. Defaults to False.
+        test_mode (bool, optional): Whether to run the function in test mode. Defaults to False.
+    """
+    tb = TimelineBuilder(
+        timeline_title=timeline_title,
+        useful_info=useful_info,
+        name_map=name_map,
+        suppress_bracketted_dates=suppress_bracketted_dates,
+        test_mode=test_mode,
+    )
+
+    tb.load_data(pdf_file)
+    tb.preprocessing()
+    tb.pass_to_llm()
+    tb.check_response_format()
+    tb.transform_events()
+    tb.deduplicate_timeline()
+    tb.create_timeline_diagram(output_file, start_year, end_year)
+
+
 class TimelineBuilder:
     """
     A class to build a timeline from a text document
@@ -353,7 +395,7 @@ class TimelineBuilder:
             if e["year"] > start_year and e["year"] < end_year:
                 js_string.append(
                     {
-                        "year": "{}/{}/{}".format(
+                        "year": "{:.0f}/{}/{}".format(
                             e["year"],
                             1 if e["month"] == 0 or e["month"] == "" else e["month"],
                             1 if e["day_of_month"] == 0 else e["day_of_month"],
@@ -373,9 +415,7 @@ class TimelineBuilder:
         js_string = json.dumps(js_string)
         script = script + js_string + script_tail
         script = script + "</script>"
-
-        html_file = "{}.html".format(file_out)
-        write_file = open(html_file, "w")
+        write_file = open(file_out, "w")
         write_file.write(
             head
             + "\n".join(
