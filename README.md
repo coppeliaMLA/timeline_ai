@@ -15,13 +15,17 @@ As with all uses of LLMs there is the possibility of [hallucinations](https://en
 
 ## Installation
 
-Install using pip
+Install using pip either directly from github...
 
 ```
 pip install timeline_ai@git+https://github.com/coppeliaMLA/timeline_ai
 ```
 
-## Obtaining an Open AI Key
+Or if you have cloned the repository simply run `pip install .` from the repository root.
+
+## Obtaining an Openai API Key
+
+You will need an to run the package. Instructions for obtaining the key are [here](https://platform.openai.com/docs/quickstart?context=python). Note the service is not free! Once you have the key you will need to add it to your environment variables. See [this notebook](examples/examples.ipynb) for an example of how to do this in python.
 
 ## Usage
 
@@ -44,7 +48,6 @@ The arguments to the function are as follows:
 - `timeline_title` (str): The title of the timeline.
 - `start_year` (int): The starting year of the timeline.
 - `end_year` (int): The ending year of the timeline.
-- `useful_info` (str, optional): Additional useful information to include in the timeline.
-- `suppress_bracketted_dates` (bool, optional): Whether to suppress bracketed dates in the timeline. Defaults to False.
+- `useful_info` (str, optional): Additional information to pass to the LLM prompt.
        
-You can find a jupyter notebook for generating the above examples [here]
+You can find a jupyter notebook for generating the above examples [here](examples/examples.ipynb)
