@@ -45,7 +45,18 @@ class TimelineBuilder:
         useful_info="",
         name_map=None,
         suppress_bracketted_dates=False,
+        test_mode=False,
     ):
+        """
+        Initialize a TimelineAI object.
+
+        Args:
+            timeline_title (str): The title of the timeline.
+            useful_info (str): Additional information to be passed to the prompt.
+            name_map (dict): A dictionary mapping names to other names.
+            suppress_bracketted_dates (bool): If True then bracketted dates are removed from the text.
+        """
+
         self.timeline_title = timeline_title
         self.chunks = None
         self.timeline = None
@@ -54,26 +65,22 @@ class TimelineBuilder:
         self.name_map = name_map
         self.useful_info = useful_info
         self.suppress_bracketted_dates = suppress_bracketted_dates
+        self.test_mode = test_mode
 
-    def load_data(self, file, pages_filter=None):
+    def load_data(self, file):
         """
-        Load data from a file.
+        Loads data from a file.
 
         Args:
-            file (str): The path to the file to load.
-            pages_filter (tuple, optional): A tuple specifying the range of pages to load. Defaults to None.
+            file (str): The path to the file to be loaded.
 
-        Returns:
-            None
+        Raises:
+            FileNotFoundError: If the specified file does not exist.
+
         """
-
         if file.endswith(".pdf"):
             loader = PyPDFLoader(file)
-            pages = loader.load_and_split()
-            if pages_filter is not None:
-                self.chunks = pages[pages_filter[0] : pages_filter[1]]
-            else:
-                self.chunks = pages
+            self.chunks = loader.load_and_split()
         else:
             with open(file) as f:
                 raw_doc = f.read()
@@ -85,7 +92,6 @@ class TimelineBuilder:
             )
             self.chunks = text_splitter.create_documents([raw_doc])
 
-        self.pages_filter = pages_filter
         self.pdf_name = file
 
     def preprocessing(self):
@@ -108,7 +114,9 @@ class TimelineBuilder:
             None
         """
         self.responses = []
-        for text in self.chunks[:4]:
+        if self.test_mode:
+            self.chunks = self.chunks[:4]
+        for text in self.chunks:
             response = {
                 "llm_response": self.prompt_llm(text.page_content),
                 "page": text.metadata["page"] + 1,
@@ -118,10 +126,13 @@ class TimelineBuilder:
 
     def prompt_llm(self, text):
         """
-        Prompts the language model to extract events from the texts.
+        Extracts a timeline with dates from the given text and returns it as a JSON array of event objects.
+
+        Args:
+            text (str): The input text from which to extract the timeline.
 
         Returns:
-            None
+            str: The extracted timeline as a JSON array of event objects.
         """
 
         template = """
@@ -145,10 +156,20 @@ class TimelineBuilder:
         return response
 
     def check_response_format(self):
+        """
+        Check the format of each response in the list and update the response dictionary accordingly.
+
+        This method iterates over each response in the list and attempts to parse it as a JSON object.
+        If the parsing is successful, the response is marked as having a valid format and the parsed JSON object is stored.
+        If the parsing fails, the response is marked as having an invalid format and the parsed JSON object is set to None.
+
+        Returns:
+            None
+        """
 
         for r in self.responses:
             try:
-                # Read the response as a json object
+                # Read the response as a JSON object
                 r["response_as_json"] = json.loads(r["llm_response"])
                 r["valid_format"] = True
             except ValueError:
@@ -156,6 +177,16 @@ class TimelineBuilder:
                 r["valid_format"] = False
 
     def transform_events(self):
+        """
+        Transforms the events by combining them from multiple responses and adding additional information.
+
+        This method iterates over the responses and combines the events from each response into a single list.
+        It also adds the source and page information to each event. Finally, it transforms each event using the
+        `transform_event` method and adds it to the timeline.
+
+        Returns:
+            None
+        """
         events = []
         for r in self.responses:
             if r["valid_format"]:
@@ -169,6 +200,15 @@ class TimelineBuilder:
             self.timeline.append(self.transform_event(e))
 
     def transform_event(self, e):
+        """
+        Transforms the event dictionary by normalizing the values of the 'month', 'day_of_month', and 'year' keys.
+
+        Args:
+            e (dict): The event dictionary to be transformed.
+
+        Returns:
+            dict: The transformed event dictionary.
+        """
 
         if "month" not in e:
             e["month"] = ""
@@ -201,40 +241,56 @@ class TimelineBuilder:
         elif isinstance(e["year"], str) and e["year"].isdigit():
             e["year"] = int(e["year"])
         else:
-            e["year"] = 0
+            e["year"] = None
 
         return e
 
     def deduplicate_timeline(self):
+        """
+        Removes duplicate events from the timeline.
+
+        This method removes duplicate events from the timeline by checking for duplicates based on the "event" and "year" columns.
+        Only events with non-null years are considered for deduplication.
+
+        Returns:
+            None
+        """
         df = pd.DataFrame(self.timeline)
+        df = df[df["year"] != None]
         df = df.drop_duplicates(subset=["event", "year"])
         self.timeline = df.to_dict(orient="records")
 
-    def run_across_chucks(self):
+    def check_json_format(self, events):
         """
-        Runs the timeline generation process across chunks of texts.
+        Check if the given events object is in the correct JSON format.
 
-        This method iterates over the texts in the `self.texts` list and extracts events from each text's page content.
-        Each event is then assigned the source page content. The extracted events are appended to the `timeline` list.
-        Finally, the `timeline` list is assigned to `self.timeline` and returned.
+        Args:
+            events (list): A list of events.
 
         Returns:
-            list: The generated timeline consisting of events extracted from the texts.
+            bool: True if the events object is in the correct format, False otherwise.
         """
-        timeline = []
-        for text in self.chunks:
-            page_events = self.get_events(text.page_content)
-            for e in page_events:
-                e["source"] = text.page_content
-                e["page"] = text.metadata["page"] + 1
-            timeline = timeline + page_events
 
-        # Remove duplicates from the timeline
-        df = pd.DataFrame(timeline)
-        df = df.drop_duplicates(subset=["event", "year"])
-        timeline = df.to_dict(orient="records")
+        # Check that the events object is a list
+        if not isinstance(events, list):
+            print("Events is not a list")
+            return False
 
-        self.timeline = timeline
+        # Check that each event is a dictionary
+        for event in events:
+            if not isinstance(event, dict):
+                print("Event is not a dictionary")
+                return False
+
+        for e in events:
+            # Check that each event has the required attributes
+            field_names = ["year", "month", "day_of_month", "event"]
+            for f in field_names:
+                if f not in e:
+                    print("Event does not have required attribute")
+                    return False
+
+        return True
 
     def create_timeline_diagram(self, file_out, start_year, end_year, width=3000):
         """
@@ -328,136 +384,6 @@ class TimelineBuilder:
             + script
         )
         write_file.close()
-
-    def get_events(self, text):
-        """
-        Extracts a timeline with dates from the given text and returns it as a list of event objects.
-
-        Args:
-            text (str): The text from which to extract the timeline.
-
-        Returns:
-            list: A list of event objects, where each event has the attributes "year", "month", "day of month", and "event".
-                  If the month and day of month are unknown, they will be left blank.
-
-        Raises:
-            ValueError: If the response from the language model is not in a valid JSON format.
-
-        """
-        template = """
-        Extract a timeline with dates from the text given below. The timeline should be stored in json as an array
-        of event objects where each event has the attributes "year", "month", "day_of_month" and "event". If the month and day
-        of month are unknown then they should be left blank. {useful_info}
-
-        Here is the text: {page}.
-        """
-
-        prompt = PromptTemplate(
-            template=template, input_variables=["page", "useful_info"]
-        )
-        llm_chain = LLMChain(
-            prompt=prompt, llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
-        )
-        response = llm_chain.run({"page": text, "useful_info": self.useful_info})
-
-        response = response.replace("```json", "").replace("```", "").strip()
-
-        try:
-            # Read the response as a json object
-            response = json.loads(response)
-        except ValueError:
-            raise ValueError("Error reading response as json")
-
-        # Check the overall format of the response
-        if self.check_format(response) is False:
-            # Raise a warning and return an empty list
-            print("Invalid format")
-            return []
-
-        # Map month names to numbers
-        month_map = {
-            "january": 1,
-            "february": 2,
-            "march": 3,
-            "april": 4,
-            "may": 5,
-            "june": 6,
-            "july": 7,
-            "august": 8,
-            "september": 9,
-            "october": 10,
-            "november": 11,
-            "december": 12,
-        }
-
-        # Transform the response
-        for e in response:
-            if e["month"] != "":
-                if str(e["month"]).lower() in month_map:
-                    e["month"] = month_map[e["month"].lower()]
-                else:
-                    e["month"] = 0
-
-            if isinstance(e["day_of_month"], int):
-                pass
-            elif isinstance(e["day_of_month"], str) and e["day_of_month"].isdigit():
-                e["day_of_month"] = int(e["day_of_month"])
-            else:
-                e["day_of_month"] = 0
-
-            if isinstance(e["year"], int):
-                pass
-            elif isinstance(e["year"], str) and e["year"].isdigit():
-                e["year"] = int(e["year"])
-            else:
-                e["year"] = 0
-
-            if self.name_map is not None:
-                for k, v in self.name_map.items():
-                    for i in v:
-                        if i in e["event"]:
-                            e["event"] = e["event"].replace(i, k)
-
-            e["event"] = check_birth_string(e["event"])
-
-        # Filter the response
-
-        clean_events = []
-        for e in response:
-            if self.validate_event(e):
-                clean_events.append(e)
-
-        return clean_events
-
-    @staticmethod
-    def validate_event(event):
-        # Check that year is an integer
-        if event["year"] == 0:
-            return False
-        return True
-
-    def check_json_format(self, events):
-
-        # Check that the events object is a list
-        if not isinstance(events, list):
-            print("Events is not a list")
-            return False
-
-        # Check that each event is a dictionary
-        for event in events:
-            if not isinstance(event, dict):
-                print("Event is not a dictionary")
-                return False
-
-        for e in events:
-            # Check that each event has the required attributes
-            field_names = ["year", "month", "day_of_month", "event"]
-            for f in field_names:
-                if f not in e:
-                    print("Event does not have required attribute")
-                    return False
-
-        return True
 
 
 def check_birth_string(input_str):
