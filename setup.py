@@ -30,7 +30,7 @@ setup(
         "Programming Language :: Python :: 3.8",
     ],
     description="Python Boilerplate contains all the boilerplate you need to create a Python package.",
-    install_requires=["pandas", "langchain", "pypdf"],
+    install_requires=["pandas", "langchain", "langchain_openai", "pypdf"],
     long_description=readme + "\n\n" + history,
     include_package_data=True,
     keywords="timeline_ai",
